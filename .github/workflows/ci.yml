@@ -50,7 +50,26 @@ jobs:
         with:
           enable-cache: true
       - name: Setup command lines (no game)
-        run: uv run --frozen pytest tests -q
+        run: uv run --frozen pytest tests -q --junitxml=setup-tests.xml
+      - name: Setup test failure details
+        if: failure()
+        shell: pwsh
+        run: |
+          if (Test-Path setup-tests.xml) {
+            [xml]$report = Get-Content setup-tests.xml -Raw
+            '```text' >> $env:GITHUB_STEP_SUMMARY
+            foreach ($case in $report.testsuites.testsuite.testcase) {
+              if ($case.failure) {
+                "$($case.classname).$($case.name)" >> $env:GITHUB_STEP_SUMMARY
+                $case.failure.InnerText >> $env:GITHUB_STEP_SUMMARY
+              }
+              if ($case.error) {
+                "$($case.classname).$($case.name)" >> $env:GITHUB_STEP_SUMMARY
+                $case.error.InnerText >> $env:GITHUB_STEP_SUMMARY
+              }
+            }
+            '```' >> $env:GITHUB_STEP_SUMMARY
+          }
 
   linux:
     runs-on: ubuntu-latest

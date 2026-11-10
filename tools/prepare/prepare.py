@@ -385,6 +385,7 @@ def main() -> None:
                 plan.compile_inputs(work, key)
                 compile_game(game, game / "exefs", work, cc, args.target, jobs)
             elif step == "shaders":
+                plan.shader_inputs(game, key)
                 shaders(game / "exefs", romfs, game, work, glslc, args.jobs or shader_jobs(), cc)
             elif step == "warm":
                 warm(game, work)

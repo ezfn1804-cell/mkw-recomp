@@ -35,7 +35,8 @@ def install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "recomp/gen.py": "GENERATOR = 1\n", "recomp/patches-mkw.txt": "synthetic patch list\n",
         "sm86/translate/glsl/alu.py": "ALU = 1\n", "sm86/decode/decoder.py": "DECODER = 1\n",
         "tools/shaders/extract.py": "EXTRACT = 1\n", "tools/shaders/translate.py": "TRANSLATE = 1\n",
-        "tools/prepare/prepare.py": "def compile_game(): return 1\ndef probe_link(): return 1\n",
+        "tools/prepare/prepare.py": ("def compile_game(): return 1\ndef probe_link(): return 1\n"
+                                     "def shaders(): return 1\ndef spec_command(): return 1\n"),
         "tools/build/build.py": "def module_glue(): return 1\n",
         "tools/prepare/machine.py": "def crt_link(): pass\ndef crt_spec(): pass\ndef lld_link(): pass\n",
     }.items():
@@ -213,6 +214,19 @@ def test_shader_tool_update_does_not_compile_the_game(install) -> None:
     tools.parent.mkdir(exist_ok=True)
     tools.write_text(json.dumps({"shaders": {"shaderc": "new verified tool input"}}))
     assert run() == ["shaders", "warm"]
+
+
+def test_shader_compiler_update_invalidates_per_program_shortcuts(install) -> None:
+    root, source, game, compiler, calls, fail, run = install
+    cached = [game / "spirv" / name for name in ("synthetic.done", "synthetic.glsl", "synthetic.result")]
+    for p in cached:
+        p.write_text("cached verdict with previous compiler")
+    assert run(resume=True) == []
+    assert all(p.is_file() for p in cached)
+    (compiler.parent / "fake glslc.exe").write_bytes(b"synthetic shader compiler v2")
+    assert run(resume=True) == ["shaders", "warm"]
+    assert not any(p.exists() for p in cached)
+    assert (game / "spirv/synthetic.spv").is_file()
 
 
 def test_equivalent_prebuilt_crt_on_another_runner_does_not_recompile(install) -> None:

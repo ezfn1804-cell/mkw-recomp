@@ -217,7 +217,8 @@ def main() -> None:
     setup.mkdir(exist_ok=True)
     (setup / "tool-inputs.json").write_text(json.dumps({
         "compiler": pins["zig"][1],
-        "shaders": {name: pins[name][1] for name in ("shaderc", "glslang", "spirv-tools")},
+        "shaders": {name: pins[name][1] for name in
+                    ("shaderc", "glslang", "spirv-tools", "libstdcxx", "libgcc", "vc14_runtime") if name in pins},
     }, sort_keys=True))
     unpack_top(got["python"], setup / "python")
     site = setup / "python" / ("Lib/site-packages" if args.target == "windows" else "lib/python3.14/site-packages")

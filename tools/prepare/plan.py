@@ -61,7 +61,8 @@ def keys(root: Path, game: Path, exefs: Path, romfs: Path, mode: str, target: st
         crt_key = data.get("inputs") or files(crt, [p for p in crt.rglob("*") if p.is_file()])
     compile_key = stamp("compile-v2", gen, abi, target, recipe, digest(compiler), *cc[1:], crt_key,
                         tools.get("compiler", ""))
-    shader_key = stamp("shaders-v2", source, files(root, shader), digest(shader_compiler),
+    shader_recipe = definitions(root, "tools/prepare/prepare.py", {"shaders", "spec_command"})
+    shader_key = stamp("shaders-v2", source, files(root, shader), shader_recipe, digest(shader_compiler),
                        json.dumps(tools.get("shaders", {}), sort_keys=True))
     exe = game / ("mkw.exe" if target == "windows" else "mkw")
     runtime = digest(exe) if exe.is_file() else "missing"
@@ -97,4 +98,18 @@ def compile_inputs(work: Path, key: str) -> None:
         return
     shutil.rmtree(obj, ignore_errors=True)
     obj.mkdir(parents=True, exist_ok=True)
+    marker.write_text(key)
+
+
+def shader_inputs(game: Path, key: str) -> None:
+    """translate.py's per-program shortcut does not include its compiler: invalidate verdicts when inputs change."""
+    out = game / "spirv"
+    marker = out / "setup-inputs.sha256"
+    if marker.is_file() and marker.read_text() == key:
+        return
+    out.mkdir(parents=True, exist_ok=True)
+    for pattern in ("*.done", "*.glsl", "*.result"):
+        for p in out.glob(pattern):
+            p.unlink()
+    # Keep existing SPIR-V until its replacement is built; an interrupted setup retains its matching resume markers.
     marker.write_text(key)

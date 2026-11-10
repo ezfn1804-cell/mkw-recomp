@@ -59,13 +59,13 @@ jobs:
             [xml]$report = Get-Content setup-tests.xml -Raw
             '```text' >> $env:GITHUB_STEP_SUMMARY
             foreach ($case in $report.testsuites.testsuite.testcase) {
-              if ($case.failure) {
-                "$($case.classname).$($case.name)" >> $env:GITHUB_STEP_SUMMARY
-                $case.failure.InnerText >> $env:GITHUB_STEP_SUMMARY
-              }
-              if ($case.error) {
-                "$($case.classname).$($case.name)" >> $env:GITHUB_STEP_SUMMARY
-                $case.error.InnerText >> $env:GITHUB_STEP_SUMMARY
+              foreach ($issue in @($case.failure, $case.error)) {
+                if ($issue) {
+                  $detail = "$($case.classname).$($case.name): $($issue.InnerText)"
+                  $detail >> $env:GITHUB_STEP_SUMMARY
+                  $encoded = $detail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+                  Write-Output "::error title=Windows setup test::$encoded"
+                }
               }
             }
             '```' >> $env:GITHUB_STEP_SUMMARY

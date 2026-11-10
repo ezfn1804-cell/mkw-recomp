@@ -27,7 +27,6 @@ setup in --game, from its setup-state.json; only the steps whose key changed run
 """
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -42,6 +41,7 @@ sys.path.insert(0, str(ROOT / "tools/build"))
 import build  # (GEN_FLAGS, module_glue, game_id: the same game code as build.py --dist)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import plan
 from machine import (
     Failed,
     crt_link,
@@ -104,7 +104,7 @@ def check(src: Path) -> tuple[Path, Path]:
 
 
 # ---- copies
-def copy_tree(src: Path, dst: Path, total: int) -> None:
+def copy_tree(src: Path, dst: Path, total: int, verify: bool = False) -> None:
     """src into dst, file by file, with progress; files already there with the same size are kept (resume)."""
     done = 0
     for d, _, files in os.walk(src):
@@ -112,7 +112,10 @@ def copy_tree(src: Path, dst: Path, total: int) -> None:
         out.mkdir(parents=True, exist_ok=True)
         for f in files:
             s, t = Path(d, f), out / f
-            if not (t.is_file() and t.stat().st_size == s.stat().st_size):
+            same = t.is_file() and t.stat().st_size == s.stat().st_size
+            if same and verify:
+                same = plan.digest(s) == plan.digest(t)
+            if not same:
                 part = t.with_name(t.name + ".part")
                 shutil.copyfile(s, part)
                 part.replace(t)
@@ -317,7 +320,8 @@ def main() -> None:
     own_children()
     game = args.game.resolve()
     state = load_state(game)
-    if not args.source:  # the last setup's; before 0.1.5 the state kept them only in its keys
+    resuming = not args.source
+    if resuming:  # the last setup's; before 0.1.5 the state kept them only in its keys
         last = state.get("source") or (str(Path(state["done"]["exefs"]).parent) if "exefs" in state["done"] else "")
         if not last:
             emit("error", "source", "no earlier setup in this folder: choose the folder of your copy")
@@ -338,24 +342,35 @@ def main() -> None:
     try:
         emit("step", "check")
         cc = args.cc.split() if args.cc else default_cc(game, args.target)
-        exefs_src, romfs_src = check(src)
+        try:
+            exefs_src, romfs_src = check(src)
+        except (Failed, OSError):
+            if not resuming or args.romfs != "copy":
+                raise
+            # A portable installation already owns the copied files; its original dump may have moved away.
+            exefs_src, romfs_src = check(game)
+            state["source"] = str(game)
         romfs = game / "romfs" if args.romfs == "copy" else romfs_src
-        keys = {
-            "exefs": str(exefs_src),
-            "romfs": f"{args.romfs} {romfs_src}",
-            "generate": f"{build.game_id()} {exefs_src}",
-            "compile": f"{build.game_id()} {exefs_src} {args.target}",
-            "shaders": f"{exefs_src} {romfs_src} {hashlib.sha256((ROOT / 'tools/shaders/translate.py').read_bytes()).hexdigest()[:16]}",
-            "warm": f"{build.game_id()} {romfs_src}",
-        }
+        keys = plan.keys(ROOT, game, exefs_src, romfs_src, args.romfs, args.target, build.game_id(), cc, glslc, build.MODULES)
+        # Old states did not record generator/translator fingerprints. Preserve verified copies, but rebuild derived
+        # output once: adopting its ABI alone would silently keep the generator bugs fixed since 0.1.6.
+        try:
+            if plan.exefs_stamp(game / "exefs", build.MODULES) == plan.exefs_stamp(exefs_src, build.MODULES):
+                state["done"]["exefs"] = keys["exefs"]
+            else:
+                state["done"].pop("exefs", None)
+        except FileNotFoundError:
+            state["done"].pop("exefs", None)
+        if args.romfs == "copy" and romfs_src.resolve() == (game / "romfs").resolve():
+            state["done"]["romfs"] = keys["romfs"]
         for step in STEPS[1:]:
             key = keys.get(step, "")
-            if step != "cleanup" and state["done"].get(step) == key:
+            if plan.reusable(step, state["done"], keys, game, work, args.target):
                 emit("skip", step)
                 continue
             emit("step", step)
             if step == "exefs":
-                copy_tree(exefs_src, game / "exefs", sum(1 for p in exefs_src.iterdir() if p.is_file()))
+                copy_tree(exefs_src, game / "exefs", sum(1 for p in exefs_src.iterdir() if p.is_file()), verify=True)
             elif step == "romfs":
                 if args.romfs == "copy":
                     copy_tree(romfs_src, romfs, ROMFS_FILES)
@@ -363,8 +378,11 @@ def main() -> None:
                 else:
                     ini_set(game / "mkw.ini", "romfs", str(romfs_src))
             elif step == "generate":
+                if state["done"].get(step) != key:
+                    shutil.rmtree(work / "generated", ignore_errors=True)
                 generate(game / "exefs", work, jobs)
             elif step == "compile":
+                plan.compile_inputs(work, key)
                 compile_game(game, game / "exefs", work, cc, args.target, jobs)
             elif step == "shaders":
                 shaders(game / "exefs", romfs, game, work, glslc, args.jobs or shader_jobs(), cc)
@@ -375,7 +393,7 @@ def main() -> None:
             state["done"][step] = key
             save_state(game, state)
         emit("done")
-    except Failed as e:
+    except (Failed, ValueError) as e:
         emit("error", "failed", f"{e} (more in logs/setup.log)")
         sys.exit(1)
     except OSError as e:

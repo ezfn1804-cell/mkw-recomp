@@ -55,12 +55,12 @@ def test_resume_without_earlier_setup(tmp_path: Path) -> None:
 
 
 def test_versions() -> None:
-    assert update.version_key("0.1.2-12-g1c15097") == (0, 1, 2)
+    assert update.version_key("0.1.2-12-g1c15097") == update.version_key("0.1.2")
     assert update.version_key("v0.1.10") > update.version_key("0.1.9")
     assert update.version_key("dev") is None
 
 
-@pytest.mark.parametrize("name", ["stale.old", "setup.old"])
+@pytest.mark.parametrize("name", ["mkw.exe.old", "setup.old"])
 def test_clean_removes_old(tmp_path: Path, name: str) -> None:
     game = tmp_path / ODD
     (game / "update").mkdir(parents=True)

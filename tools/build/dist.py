@@ -21,6 +21,7 @@ Usage: uv run tools/build/dist.py [--target linux|windows] [--check]
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import shutil
@@ -175,7 +176,11 @@ def windows_crt(crt: Path) -> None:
                 files[p.name] = p
             elif not arg.startswith(("-PDB:", "-PDBALTPATH:", "-OUT:", "-IMPLIB:")):
                 flags.append(arg)
-    (crt / "link.json").write_text(json.dumps({"flags": flags, "files": list(files)}, indent=1))
+    # A build path in an object file is not a changed C runtime. This stable input stamp lets preparation keep the
+    # game's library across runtime-only package updates produced on different runners.
+    inputs = hashlib.sha256((PINS["linux"]["zig"][1] + PINS["windows"]["zig"][1] +
+                             inspect.getsource(windows_crt)).encode()).hexdigest()
+    (crt / "link.json").write_text(json.dumps({"flags": flags, "files": list(files), "inputs": inputs}, indent=1))
     print(f"{crt}: {len(files)} files, flags {' '.join(flags)}")
 
 
@@ -210,6 +215,10 @@ def main() -> None:
     got = {name: fetch(url, want) for name, (url, want) in pins.items()}
     setup = out / "setup"
     setup.mkdir(exist_ok=True)
+    (setup / "tool-inputs.json").write_text(json.dumps({
+        "compiler": pins["zig"][1],
+        "shaders": {name: pins[name][1] for name in ("shaderc", "glslang", "spirv-tools")},
+    }, sort_keys=True))
     unpack_top(got["python"], setup / "python")
     site = setup / "python" / ("Lib/site-packages" if args.target == "windows" else "lib/python3.14/site-packages")
     for wheel in ("numpy", "lz4"):

@@ -5,7 +5,8 @@ again without --source (only the steps whose key changed).
 
 Why: players kept reporting from old versions (#28 from 0.1.2-12) and an update by hand means unpacking and preparing
 again. The offer at start follows hookshot's host/hos_update.c (GPL-3.0, idea only): a few seconds at most, nothing
-offline. Only published releases count (releases/latest: never drafts or prereleases).
+offline. Only published releases count. Custom builds also accept published custom prereleases from this fork;
+Actions artifacts and drafts are never offered.
 
 Output: one event per line on stdout, as prepare.py's:
   check  "update <tag> <bytes>" when the latest release is newer than --version, "latest" when not
@@ -17,7 +18,7 @@ Exit codes: 0 done, 1 failed.
 Usage: python -I update.py check --version VER [--os linux|windows]
        python -I update.py fetch --tag TAG --dest DIR [--os linux|windows]
        python -I update.py clean --game DIR
-MKW_UPDATE_REPO=owner/name (default adriadam10/mkw-recomp) and MKW_UPDATE_AS=<version> (compare as that version: a
+MKW_UPDATE_REPO=owner/name (default ezfn1804-cell/mkw-recomp) and MKW_UPDATE_AS=<version> (compare as that version: a
 test) change what is asked.
 """
 
@@ -28,19 +29,25 @@ import os
 import re
 import shutil
 import ssl
+import stat
 import sys
 import time
 import urllib.error
 import urllib.request
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from urllib.parse import quote
 
-REPO = os.environ.get("MKW_UPDATE_REPO") or "adriadam10/mkw-recomp"
+REPO = os.environ.get("MKW_UPDATE_REPO") or "ezfn1804-cell/mkw-recomp"
 CHECK_TIMEOUT = 5  # s: the start screen waits for nothing, but a hung request should not linger
 FETCH_TIMEOUT = 30
 ASSET_SUFFIX = {"linux": "-x86_64.AppImage", "windows": "-windows-x64.zip"}  # tools/build/release.py's names
 CLEAN_WAIT = 20  # s
 OLD_SUFFIX = ".old"  # what the launcher renames the replaced files to (Windows: a running exe cannot be removed)
+VERSION = re.compile(r"v?(\d+)\.(\d+)\.(\d+)(?:-custom\.([1-9]\d*))?(?:-\d+-g[0-9a-f]+)?(?:-dirty)?")
+# These are the distributed files, not the player's data. launcher_update.cpp swaps only the extracted entries.
+PACKAGE_FILES = {"mkw.exe", "sdl3.dll", "libopus-0.dll", "diagnose.py", "collect-diagnostic.cmd", "test-windows.md"}
+PACKAGE_DIRS = {"setup", "licenses"}
 
 
 def emit(*words: object) -> None:
@@ -67,40 +74,63 @@ def get(url: str, timeout: int) -> urllib.request.addinfourl:
     return urllib.request.urlopen(req, timeout=timeout, context=ssl_context())
 
 
-def version_key(v: str) -> tuple[int, int, int] | None:
-    """(major, minor, patch) of a tag or of rt_port_version ("0.1.2-12-g1c15097" counts as 0.1.2); None for "dev"."""
-    m = re.match(r"v?(\d+)\.(\d+)\.(\d+)", v)
-    return (int(m[1]), int(m[2]), int(m[3])) if m else None
+def version_key(v: str) -> tuple[int, int, int, int, int] | None:
+    """Order custom.N numerically, then the stable version; accept git-describe suffixes without downgrading them."""
+    m = VERSION.fullmatch(v)
+    if not m:
+        return None
+    core = (int(m[1]), int(m[2]), int(m[3]))
+    return (*core, 0, int(m[4])) if m[4] else (*core, 1, 0)
 
 
-def latest_asset(os_name: str) -> tuple[str, dict]:
-    with get(f"https://api.github.com/repos/{REPO}/releases/latest", CHECK_TIMEOUT) as r:
-        rel = json.load(r)
-    if rel.get("draft") or rel.get("prerelease"):
-        raise ValueError("the latest release is not a published one")
+def release_asset(rel: dict, os_name: str, allow_custom: bool) -> tuple[str, dict] | None:
+    tag = rel.get("tag_name", "")
+    key = version_key(tag)
+    if rel.get("draft") or key is None:
+        return None
+    if key[3] == 0 and not allow_custom:
+        return None
+    if rel.get("prerelease") and not (allow_custom and key[3] == 0):
+        return None
     for a in rel.get("assets", []):
         if a["name"].endswith(ASSET_SUFFIX[os_name]):
-            return rel["tag_name"], a
-    raise ValueError(f"release {rel['tag_name']} has no package for {os_name}")
+            return tag, a
+    return None
+
+
+def latest_asset(os_name: str, allow_custom: bool = False) -> tuple[str, dict] | None:
+    # Unlike releases/latest, this includes custom.N prereleases deliberately published by the maintainer.
+    with get(f"https://api.github.com/repos/{REPO}/releases?per_page=100", CHECK_TIMEOUT) as r:
+        releases = json.load(r)
+    choices = [a for rel in releases if (a := release_asset(rel, os_name, allow_custom))]
+    return max(choices, key=lambda a: version_key(a[0])) if choices else None
 
 
 def check(args: argparse.Namespace) -> None:
     current = version_key(os.environ.get("MKW_UPDATE_AS") or args.version)
-    tag, asset = latest_asset(args.os)
-    latest = version_key(tag)
-    if current is None or latest is None or latest <= current:
+    found = latest_asset(args.os, allow_custom=current is not None and current[3] == 0) if current else None
+    if found is None or version_key(found[0]) <= current:
         emit("latest")
         return
+    tag, asset = found
     emit("update", tag, asset["size"])
 
 
 def fetch(args: argparse.Namespace) -> None:
-    tag, asset = latest_asset(args.os)
-    if tag != args.tag:
-        raise ValueError(f"the latest release is now {tag}, not {args.tag}")
+    if version_key(args.tag) is None:
+        raise ValueError("invalid release tag")
+    # Fetch the offered release, even if another one was published while the player read the offer.
+    with get(f"https://api.github.com/repos/{REPO}/releases/tags/{quote(args.tag, safe='')}", CHECK_TIMEOUT) as r:
+        rel = json.load(r)
+    found = release_asset(rel, args.os, allow_custom=True)
+    if found is None or found[0] != args.tag:
+        raise ValueError("this release is not published or has no compatible package")
+    tag, asset = found
     digest = asset.get("digest") or ""
-    if not digest.startswith("sha256:"):
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         raise ValueError(f"{asset['name']} has no sha256 on GitHub: not installed")
+    if not re.fullmatch(r"[A-Za-z0-9._+-]+", asset["name"]):
+        raise ValueError("invalid package filename")
     dest = args.dest.resolve()
     dest.mkdir(parents=True, exist_ok=True)
     part = dest / (asset["name"] + ".part")
@@ -124,15 +154,40 @@ def fetch(args: argparse.Namespace) -> None:
     new = dest / "new"
     shutil.rmtree(new, ignore_errors=True)
     with zipfile.ZipFile(part) as z:
-        for name in z.namelist():  # nothing outside the folder, whatever the zip says
-            if Path(name).is_absolute() or ".." in Path(name).parts:
-                raise ValueError(f"{asset['name']} holds a path outside its folder: {name}")
+        validate_windows_package(z)
         z.extractall(new)
     part.unlink()
     tops = [p for p in new.iterdir() if p.is_dir()]
     if len(tops) != 1 or not (tops[0] / "mkw.exe").is_file():
         raise ValueError(f"{asset['name']} is not a package of the port (no mkw-recomp/mkw.exe)")
     emit("ready", tops[0])
+
+
+def validate_windows_package(z: zipfile.ZipFile) -> None:
+    """Keep the launcher's swap away from game data, saves, settings, generated files and caches."""
+    names = set()
+    for info in z.infolist():
+        name = info.filename
+        p, win = PurePosixPath(name), PureWindowsPath(name)
+        if p.is_absolute() or win.drive or "\\" in name or ".." in p.parts or any(":" in part for part in p.parts):
+            raise ValueError("the package holds a path outside its folder")
+        if stat.S_ISLNK(info.external_attr >> 16):
+            raise ValueError("the package holds a symbolic link")
+        if not p.parts or p.parts[0] != "mkw-recomp":
+            raise ValueError("the package must have a single mkw-recomp folder")
+        if len(p.parts) == 1 and info.is_dir():
+            continue
+        if len(p.parts) < 2:
+            raise ValueError("invalid package layout")
+        top = p.parts[1].casefold()
+        if top not in PACKAGE_DIRS and not (top in PACKAGE_FILES and len(p.parts) == 2 and not info.is_dir()):
+            raise ValueError("the package contains files outside the runtime and setup tools")
+        normalized = name.casefold()
+        if normalized in names:
+            raise ValueError("the package contains duplicate paths")
+        names.add(normalized)
+    if "mkw-recomp/mkw.exe" not in names:
+        raise ValueError("the package has no mkw.exe")
 
 
 def clean(args: argparse.Namespace) -> None:
@@ -142,6 +197,8 @@ def clean(args: argparse.Namespace) -> None:
     for p in game.iterdir():
         if not p.name.endswith(OLD_SUFFIX):
             continue
+        if p.name[:-len(OLD_SUFFIX)].casefold() not in PACKAGE_FILES | PACKAGE_DIRS:
+            continue  # never remove a player's own *.old backups
         for _ in range(CLEAN_WAIT):
             try:
                 shutil.rmtree(p) if p.is_dir() and not p.is_symlink() else p.unlink()

@@ -6,10 +6,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Test version, for example 0.1.8-custom.1'
+        description: 'Test version, for example 0.1.8-custom.2'
         type: string
         required: true
-        default: '0.1.8-custom.1'
+        default: '0.1.8-custom.2'
 
 permissions:
   contents: read
@@ -24,7 +24,7 @@ jobs:
     container: archlinux:latest
     env:
       UV_PYTHON: '3.14'
-      TEST_VERSION: ${{ inputs.version || '0.1.8-custom.1' }}
+      TEST_VERSION: ${{ inputs.version || '0.1.8-custom.2' }}
     steps:
       - name: Build tools
         run: pacman -Syu --noconfirm --needed git clang ninja binutils uv python
@@ -37,7 +37,7 @@ jobs:
           set -euo pipefail
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           if [[ ! "$TEST_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-custom\.[1-9][0-9]*$ ]]; then
-            echo 'Use a test version such as 0.1.8-custom.1' >&2
+            echo 'Use a test version such as 0.1.8-custom.2' >&2
             exit 1
           fi
           git -c user.name='Custom build' -c user.email='build@localhost' \
@@ -66,8 +66,12 @@ jobs:
           uv run --frozen python - <<'PY'
           import os
           import subprocess
+          import sys
           import zipfile
           from pathlib import Path
+
+          sys.path.insert(0, str(Path('tools/prepare').resolve()))
+          from update import validate_windows_package
 
           archive = Path('build/release') / f"mkw-recomp-{os.environ['TEST_VERSION']}-windows-x64.zip"
           # Include standalone diagnostics and source licence notices, never local game files or logs.
@@ -81,6 +85,8 @@ jobs:
               # This permissive notice is inline rather than in a separate LICENSE file.
               name = 'runtime/gfx/nvn/tex/nvn_tex.c'
               z.write(name, 'mkw-recomp/licenses/sources/' + name)
+          with zipfile.ZipFile(archive) as z:
+              validate_windows_package(z)
           PY
           sha256sum "build/release/mkw-recomp-$TEST_VERSION-windows-x64.zip" \
             > "build/release/mkw-recomp-$TEST_VERSION-windows-x64.zip.sha256"

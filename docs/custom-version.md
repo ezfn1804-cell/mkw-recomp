@@ -19,18 +19,56 @@ SHA-256. Il utilise un tag uniquement dans le runner pour identifier l'exécutab
 de permission d'écriture et ne crée aucune GitHub Release. Une compilation réussie ne valide pas le jeu sous Windows.
 Le ZIP est un artefact de test conservé sept jours, à extraire dans un nouveau dossier.
 
-Le workflow se déclenche à l'envoi d'une branche `custom/**` (version de test par défaut `0.1.8-custom.1`)
+Le workflow se déclenche à l'envoi d'une branche `custom/**` (version de test par défaut `0.1.8-custom.2`)
 et reste lançable manuellement. Obtenir l'autorisation du propriétaire avant l'envoi : le code et l'artefact auront
 la visibilité du dépôt. Une fois l'envoi autorisé, ouvrir Actions → Custom Windows test package → le run correspondant
 au commit, puis télécharger son artefact après réussite. Ce premier envoi ne dépend pas de l'enregistrement du workflow
 manuel sur la branche par défaut. Pour un lancement manuel ultérieur, une fois le workflow disponible sur la branche
 par défaut : Run workflow → sélectionner la branche et le numéro du candidat.
-Ce workflow doit encore être exécuté sur un runner GitHub pour valider l'empaquetage de bout en bout.
+L'empaquetage `0.1.8-custom.1` et la CI ont réussi sur GitHub Actions. Chaque candidat suivant doit réussir ses propres
+vérifications. Le ZIP est également contrôlé avec les règles de l'outil de mise à jour avant son envoi en artefact.
 
-Avant toute future mise à jour intégrée au lanceur, définir son dépôt de distribution propre et tester la comparaison
-des versions : l'actuel `tools/prepare/update.py` compare seulement `major.minor.patch` et ignore le suffixe `custom.N`.
-Ne pas utiliser son offre de mise à jour pour passer d'un candidat personnalisé à un autre. Les tests ci-dessous
-contournent le lanceur et désactivent la recherche de mises à jour dans le processus de test.
+## Mises à jour de la version personnalisée
+
+Le lanceur personnalisé utilise les publications de `ezfn1804-cell/mkw-recomp`. Il compare aussi les numéros
+`custom.N` : `custom.10` vient après `custom.2`. Une version personnalisée peut recevoir une préversion personnalisée
+publiée ; les brouillons et les artefacts Actions ne déclenchent aucune proposition de mise à jour.
+Le téléchargement vise exactement la version proposée, vérifie son SHA-256 fourni par GitHub, puis prépare les fichiers
+avant le remplacement par le lanceur existant. Sous Windows, le ZIP ne peut contenir que le programme, ses DLL, ses
+outils et ses notices ; les données du jeu, les réglages, les sauvegardes et les caches restent dans le dossier.
+Le remplacement reprend le mécanisme existant de restauration des fichiers si une étape échoue.
+
+La préparation compare les entrées de chaque étape :
+
+| Changement | Travail relancé |
+|---|---|
+| Programme seul, ABI et outils inchangés | Préchauffage ; le jeu compilé et les shaders sont réutilisés |
+| Traducteur de shaders ou ses outils | Traduction des shaders et préchauffage |
+| Générateur CPU, correctifs CPU, ABI ou compilateur | Génération si nécessaire, compilation du jeu et préchauffage |
+| Aucun changement | Étapes déjà terminées sautées |
+| Compilation interrompue | Reprise des fichiers valides ; objets écartés si leurs entrées ont changé |
+
+Un ancien `setup-state.json` ne mémorisait pas les versions du générateur et de ses modules. Le premier passage à
+cette préparation reconstruit donc une fois les fichiers dérivés qui ne peuvent pas être vérifiés. Les fichiers du
+jeu déjà copiés restent en place, ainsi que les sauvegardes : cette migration n'est pas une réinstallation. Les mises
+à jour suivantes suivent les empreintes ci-dessus. Le contrôle du RomFS reste un contrôle de structure et de nombre
+de fichiers, sans vérification complète de son contenu ; seul le dump 1.0.0 non modifié est pris en charge.
+Si le dump d'origine a disparu après une préparation en mode copie, la copie installée peut servir à la reprise.
+
+Le port officiel 0.1.6 recherche les publications du dépôt d'origine. Pour passer au canal personnalisé, une première
+opération manuelle reste nécessaire : fermer le jeu, extraire le ZIP personnalisé **dans la copie de test existante**
+et accepter le remplacement des fichiers du programme, puis cliquer sur **Préparer**. Ne supprimer ni `setup-state.json`,
+ni `mkwgame.dll`, ni `exefs/`, ni `romfs/`, ni le profil. Le ZIP ne fournit pas ces fichiers.
+
+Pour préparer une future mise à jour automatique, vérifier le candidat sur Windows, attribuer le prochain numéro,
+décrire les changements et les tests dans `CHANGELOG.md`, puis créer une release contenant le ZIP Windows directement
+(pas le ZIP extérieur de l'artefact Actions). GitHub doit fournir son `digest` SHA-256. Une release personnalisée peut
+être marquée « préversion ». **Ne publier cette release qu'après autorisation du propriétaire.** Le workflow de test
+ne la publie pas ; en l'absence de release publiée, aucun bouton de nouvelle version n'apparaît.
+
+Les tests automatisés de sélection, téléchargement et reprise utilisent des réponses GitHub et des modules synthétiques.
+Ils ne prouvent pas le remplacement réel d'un programme en cours d'exécution sur votre PC ni le bon fonctionnement
+du jeu. Les mesures suivantes restent isolées et désactivent la recherche de mises à jour pendant les essais.
 
 ## Première étape sur Windows : une copie indépendante
 

@@ -1,0 +1,92 @@
+name: Custom Windows test package (no publication)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Test version, for example 0.1.8-custom.1'
+        type: string
+        required: true
+        default: '0.1.8-custom.1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-package:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    env:
+      UV_PYTHON: '3.14'
+      TEST_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Build tools
+        run: pacman -Syu --noconfirm --needed git clang ninja binutils uv python
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Identify this test build (local tag only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          if [[ ! "$TEST_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-custom\.[1-9][0-9]*$ ]]; then
+            echo 'Use a test version such as 0.1.8-custom.1' >&2
+            exit 1
+          fi
+          git -c user.name='Custom build' -c user.email='build@localhost' \
+            tag -a "v$TEST_VERSION" -m 'Ephemeral test build; never pushed'
+      - name: Frozen dependency checks
+        run: |
+          uv run --frozen ruff check tools sm86
+          uv run --frozen tools/docs/check.py
+          uv run --frozen tools/git/cfg_rows.py
+          uv run --frozen pytest tests -q
+      - uses: actions/cache@v4
+        with:
+          path: build/win
+          key: custom-windeps-${{ hashFiles('tools/build/windeps.py') }}
+      - name: Verified Windows dependencies
+        run: uv run --frozen tools/build/windeps.py
+      - name: Windows runtime (no game)
+        run: uv run --frozen tools/build/build.py --target windows --dist --runtime-only --jobs 4
+      - name: Portable setup tools
+        run: uv run --frozen tools/build/dist.py --target windows
+      - name: Test ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --frozen tools/build/release.py --target windows --version "$TEST_VERSION"
+          uv run --frozen python - <<'PY'
+          import os
+          import subprocess
+          import zipfile
+          from pathlib import Path
+
+          archive = Path('build/release') / f"mkw-recomp-{os.environ['TEST_VERSION']}-windows-x64.zip"
+          # Include standalone diagnostics and source licence notices, never local game files or logs.
+          notices = subprocess.check_output(['git', 'ls-files', '-z', '*LICENSE*']).decode().split('\0')
+          with zipfile.ZipFile(archive, 'a', zipfile.ZIP_DEFLATED) as z:
+              z.write('tools/run/diagnose.py', 'mkw-recomp/diagnose.py')
+              z.write('tools/run/collect-diagnostic.cmd', 'mkw-recomp/collect-diagnostic.cmd')
+              z.write('docs/custom-version.md', 'mkw-recomp/TEST-WINDOWS.md')
+              for name in filter(None, notices):
+                  z.write(name, 'mkw-recomp/licenses/sources/' + name)
+              # This permissive notice is inline rather than in a separate LICENSE file.
+              name = 'runtime/gfx/nvn/tex/nvn_tex.c'
+              z.write(name, 'mkw-recomp/licenses/sources/' + name)
+          PY
+          sha256sum "build/release/mkw-recomp-$TEST_VERSION-windows-x64.zip" \
+            > "build/release/mkw-recomp-$TEST_VERSION-windows-x64.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: custom-windows-${{ inputs.version }}-${{ github.run_number }}
+          path: |
+            build/release/mkw-recomp-${{ inputs.version }}-windows-x64.zip
+            build/release/mkw-recomp-${{ inputs.version }}-windows-x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 7

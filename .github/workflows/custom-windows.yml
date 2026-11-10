@@ -1,6 +1,8 @@
-name: Custom Windows test package (no publication)
+name: Custom Windows test package (no release)
 
 on:
+  push:
+    branches: ['custom/**']
   workflow_dispatch:
     inputs:
       version:
@@ -22,7 +24,7 @@ jobs:
     container: archlinux:latest
     env:
       UV_PYTHON: '3.14'
-      TEST_VERSION: ${{ inputs.version }}
+      TEST_VERSION: ${{ inputs.version || '0.1.8-custom.1' }}
     steps:
       - name: Build tools
         run: pacman -Syu --noconfirm --needed git clang ninja binutils uv python
@@ -84,9 +86,9 @@ jobs:
             > "build/release/mkw-recomp-$TEST_VERSION-windows-x64.zip.sha256"
       - uses: actions/upload-artifact@v4
         with:
-          name: custom-windows-${{ inputs.version }}-${{ github.run_number }}
+          name: custom-windows-${{ env.TEST_VERSION }}-${{ github.run_number }}
           path: |
-            build/release/mkw-recomp-${{ inputs.version }}-windows-x64.zip
-            build/release/mkw-recomp-${{ inputs.version }}-windows-x64.zip.sha256
+            build/release/mkw-recomp-${{ env.TEST_VERSION }}-windows-x64.zip
+            build/release/mkw-recomp-${{ env.TEST_VERSION }}-windows-x64.zip.sha256
           if-no-files-found: error
           retention-days: 7

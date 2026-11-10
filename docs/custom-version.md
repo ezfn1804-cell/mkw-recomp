@@ -13,14 +13,18 @@ Le guide décrit une procédure ; il ne constitue pas une validation du jeu ou d
 - Nommer les candidats `0.1.8-custom.1`, `0.1.8-custom.2`, etc. Le numéro du port est distinct de la version du jeu.
 - Ne pousser aucun tag de publication et ne créer aucune release sans autorisation du propriétaire.
 
-La CI dans `.github/workflows/ci.yml` contrôle aussi les branches `custom/**`. Le workflow manuel
+La CI dans `.github/workflows/ci.yml` contrôle aussi les branches `custom/**`. Le workflow
 `.github/workflows/custom-windows.yml` prépare un ZIP Windows avec les outils de préparation, le diagnostic et un
 SHA-256. Il utilise un tag uniquement dans le runner pour identifier l'exécutable ; il ne pousse aucun tag, n'a pas
 de permission d'écriture et ne crée aucune GitHub Release. Une compilation réussie ne valide pas le jeu sous Windows.
 Le ZIP est un artefact de test conservé sept jours, à extraire dans un nouveau dossier.
 
-Une fois les modifications autorisées à être envoyées sur GitHub : Actions → Custom Windows test package →
-Run workflow → sélectionner la branche et le numéro du candidat. Télécharger l'artefact du run réussi.
+Le workflow se déclenche à l'envoi d'une branche `custom/**` (version de test par défaut `0.1.8-custom.1`)
+et reste lançable manuellement. Obtenir l'autorisation du propriétaire avant l'envoi : le code et l'artefact auront
+la visibilité du dépôt. Une fois l'envoi autorisé, ouvrir Actions → Custom Windows test package → le run correspondant
+au commit, puis télécharger son artefact après réussite. Ce premier envoi ne dépend pas de l'enregistrement du workflow
+manuel sur la branche par défaut. Pour un lancement manuel ultérieur, une fois le workflow disponible sur la branche
+par défaut : Run workflow → sélectionner la branche et le numéro du candidat.
 Ce workflow doit encore être exécuté sur un runner GitHub pour valider l'empaquetage de bout en bout.
 
 Avant toute future mise à jour intégrée au lanceur, définir son dépôt de distribution propre et tester la comparaison
